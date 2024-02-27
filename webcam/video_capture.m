@@ -9,8 +9,8 @@ cam2nd = webcam(2);
 cam2nd.Resolution = cam2nd.AvailableResolutions{6}; %Resolution 1920x1080
 
 % Object for writing video
-vwrite = VideoWriter('Lauren_test_3','MPEG-4');
-vwrite_2ndcam = VideoWriter('Lauren_test_Real_3','MPEG-4');
+vwrite = VideoWriter('Arun_test_3','MPEG-4');
+vwrite_2ndcam = VideoWriter('Arun_test_Real_3','MPEG-4');
 
 open(vwrite);
 open(vwrite_2ndcam);
