@@ -1,140 +1,126 @@
-classdef OfflineTracking
+classdef OfflineTracking < handle
     properties
-        number_of_markers;
+        % Robot and tracking information that can be defined
+        n_markers;      % number of flourescent markers on robot
+
+        marker_size;    % minimum size of marker in pixels (integer)
+
+        n_frames;       % number of frames in video 
+
+        max_dist;       % maximum distance a marker can travel in a single frame
+
+        start_frame;
+
+        % Stored tracking data
         centroids;
-        PrevPt;
+        prev_pos;
         P0;
-        CurrPt;
+        this_pos;
         cent;
-        tracking_data_centroid; % Added
-        
+        tracking_data_centroid; 
+
+        % Video variables
         vread;
-        numberOfFrames;
-		% start_frame;
         vwrite;
-        
-        overlay_image;
-        overlay;
+
     end
     methods
         function obj = OfflineTracking(params)
-            obj.number_of_markers = params.number_of_markers;
-            obj.PrevPt = [];
-            obj.P0 = [];
-            obj.CurrPt = [];
-            obj.cent = [];
-            obj.tracking_data_centroid = [];  % Added
+            % Set values.
+            obj.n_markers = params.number_of_markers;
             obj.vread = params.vread;
-            obj.numberOfFrames = obj.vread.NumberOfFrame;
+            obj.n_frames = obj.vread.NumberOfFrame;
             obj.vwrite = params.vwrite;
-            obj.centroids = zeros(obj.numberOfFrames,3*obj.number_of_markers);
-            % obj.overlay_image = params.overlay_img_cut;
-            obj.overlay = params.overlay;
-			% obj.start_frame = params.start_frame;
+
+            obj.set_property(params, 'start_frame', 1.0);
+            obj.set_property(params, 'marker_size', 10);
+            obj.set_property(params, 'max_dist',60);
+            obj.set_property(params, 'P0', []);
+
+            % Initialize stored tracking data.
+            obj.prev_pos = [];
+            obj.this_pos = [];
+            obj.cent = [];
+            obj.tracking_data_centroid = [];  
+            obj.centroids = zeros(obj.n_frames,3*obj.n_markers);
+
         end
-					
-        function start_frame_robot = find_start_frame(obj)
-            ii = 1;
-            while(ii)
-    			thisFrame = read(obj.vread,ii);
-    			newim = createMaskGreen(thisFrame);
-    			newim = bwareaopen(newim,40);
-    			newim = imfill(newim, 'holes');
 
-    			[labeledImage, numberOfRegions] = bwlabel(newim);
-
-                if numberOfRegions == 3
-                    ii = ii+1;
-                end
-
-                if numberOfRegions < 3
-                    start_frame_robot = ii;
-                    ii = 0;
-                end
+        % Make function to set properties if they are passed as an
+        % input. Otherwise, use default values.
+        function set_property(obj, source_struct, param_name, def_val)
+            if ( isfield(source_struct, param_name) )
+                obj.(param_name) = source_struct.(param_name);
+            else
+                obj.(param_name) = def_val;
             end
         end
 
-			
-		% 	count = 0;
-		% 	cent = zeros(numberOfRegions,2);
-        % 
-		% 	stats = regionprops(labeledImage, 'BoundingBox','Centroid','Area','EquivDiameter');
-		% 	for rb = 1:numberOfRegions
-			% 	count = count + 1;
-			% 	cent(count,:) = stats(rb).Centroid;
-			% 	cent(count,2) = 1080 - obj.cent(count,2) ;  % Correction for y-axis.
-		% 	end
-        % 
-		% 	if ii == 1
-		% 	centroid(ii,:) = [mean(cent(:,1)) mean(cent(:,2))];
-		% 	end
-        % 
-		% 	if ii ~= 1
-		% 	centroid(ii,:) = [mean(cent(:,1)) mean(cent(:,2))];
-		% 	X = [centroid(ii-1,:);centroid(ii,:)];
-        %     d(ii) = pdist(X,'euclidean');
-			% 	if d > 1000
-				% 	start_frame = ii-1;
-				% 	ii = 0;
-			% 	end
-		% 	end
-		% 	end
-		% end
-			
-		
+        % Tracking function.
         function [tracking_data] = tracking(obj)
-            for k = 1:obj.numberOfFrames
-                thisFrame = read(obj.vread,k);
-                newim = createMaskBlue(thisFrame);
-                newim = bwareaopen(newim,40);
-                newim = imfill(newim, 'holes');
+            for i_frame = 1:obj.n_frames
+                this_frame = read(obj.vread,i_frame);
+                % Input mask (binarize) function based on lighting/ environment.
+                frame_mask =  createMaskhdblue(this_frame);
 
-                [labeledImage, numberOfRegions] = bwlabel(newim);
+                % Isolate the markers based on connected components of at
+                % least this.marker_size number of pixels.
+                frame_mask = bwareaopen(frame_mask,obj.marker_size);
 
-                count = 0;
-                obj.cent = zeros(numberOfRegions,2);
+                % Flood fill markers.
+                frame_mask = imfill(frame_mask, 'holes');
 
+                % Label the markers and extract marker properties.
+                [labeledImage, n_markers_detected] = bwlabel(frame_mask);
                 stats = regionprops(labeledImage, 'BoundingBox','Centroid','Area','EquivDiameter');
-                 for rb = 1:numberOfRegions
-%                      aa = stats(rb).Centroid;
-%                      if aa(1) > 10
-                     count = count + 1;
-                     obj.cent(count,:) = stats(rb).Centroid;
-                     obj.cent(count,2) = 1080 - obj.cent(count,2) ;  % Correction for y-axis.
-%                      end
-                 end
 
-                 obj.tracking_data_centroid(k,:) = [mean(obj.cent(:,1)) 1080-mean(obj.cent(:,2))];   % Added ANM (Purely for plotting purpose)
-%                  tc(k,:) = obj.tracking_data_centroid(k,:);     
+                % Initialize marker centroids (2-D). 
+                obj.cent = zeros(n_markers_detected,2);
+ 
+                for i_marker = 1:n_markers_detected
+                    % Store marker centroids.
+                    obj.cent(i_marker,:) = stats(i_marker).Centroid;
+
+                    % Correct y-axis values (flipped).
+                    obj.cent(i_marker,2) = 1080 - obj.cent(i_marker,2) ;  
+                end
+
+                % Initialize data as 3-D points.
+                obj.cent = [obj.cent,zeros(n_markers_detected,1);];
+                if i_frame == 1
+                    if isempty(obj.P0)
+                        obj.P0 = obj.cent;
+                    else
+                        obj.cent = obj.P0;
+                    end
+                    obj.prev_pos = obj.cent;
+                    obj.centroids(i_frame,:) = reshape(obj.prev_pos',1,[]);
+                    figure
+                    plot(obj,this_frame,n_markers_detected,i_frame);
+
              
-                  zc = zeros(size(obj.cent,1),1);
-                  obj.cent = [obj.cent,zc];
-                  if k == 1
-                    obj.P0 = obj.cent;
-                    obj.PrevPt = obj.cent;
-                    obj.centroids = data_logging(obj,k);
-                    plot(obj,thisFrame,count,k,newim);
-                  end
+                else
+                    % Find markers' nearest neighbor for data alignment.
+                    obj.this_pos = nearest_neighbor(obj,n_markers_detected);
 
-                  if k ~= 1
+                    % Find local rigid-body transformation of robot from 
+                    % previous frame.
+                    [Rot,T] = pose_estimation(obj,obj.this_pos,obj.prev_pos);
+                    theta(i_frame,:) = reshape(Rot,[1,9]);
+                    trans(i_frame,:) = T';
 
-                     obj.CurrPt = nearest_neighbor(obj,count);
-%                      obj.CurrPt = obj.cent;
+                    % Find global rigid-body transformation of robot from 
+                    % previous frame.
+                    [Rot,T] = pose_estimation(obj,obj.P0,obj.this_pos);
+                    theta_G(i_frame,:) = reshape(Rot,[1,9]);
+                    trans_G(i_frame,:) = T';
 
-                     [Rot,T] = pose_estimation(obj,obj.CurrPt,obj.PrevPt,k);
-                     theta(k,:) = reshape(Rot,[1,9]);
-                     trans(k,:) = T';
+                    obj.prev_pos = obj.this_pos;
+                    obj.centroids(i_frame,:) = reshape(obj.prev_pos',1,[]);
 
-                     [Rot,T] = pose_estimation(obj,obj.P0,obj.CurrPt,k);
-                     theta_G(k,:) = reshape(Rot,[1,9]);
-                     trans_G(k,:) = T';
+                    plot(obj,this_frame,n_markers_detected,i_frame);
 
-                     obj.PrevPt = obj.CurrPt;
-                     obj.centroids = data_logging(obj,k);
-
-                     plot(obj,thisFrame,count,k,newim);
-
-                  end
+                end
 
             end
 
@@ -142,117 +128,92 @@ classdef OfflineTracking
             close(obj.vwrite);
         end
 
-        function centroids = nearest_neighbor(obj,count)      %Change the name of the centroid ->
-            
-            obj.CurrPt = zeros(obj.number_of_markers,3);
-            if(count > obj.number_of_markers)
-                for i = 1:obj.number_of_markers
-                    for j = 1:count
-                        X = [obj.PrevPt(i,:);obj.cent(j,:)];
+
+        % Find markers' nearest neighbor in next frame to ensure marker
+        % data points are matched to correct markers. 
+     function centroids = nearest_neighbor(obj,n_markers_detected)      %Change the name of the centroid ->
+            % Initialize current marker positions.
+            obj.this_pos = zeros(obj.n_markers,3);
+
+             % Match markers in this frame to markers in previous frame by
+             % finding the minimum euclidean distance between frames
+             % (bounded by a max allowable distance).
+            if n_markers_detected > obj.n_markers
+                for i = 1:obj.n_markers
+                    for j = 1:n_markers_detected
+                        X = [obj.prev_pos(i,:); obj.cent(j,:)];
                         d(j) = pdist(X,'euclidean');
                     end
                     [dmin,ind] = min(d);  
-                    if(dmin < 25)
-                        obj.CurrPt(i,:) = obj.cent(ind,:);
+                    if dmin < obj.max_dist
+                        obj.this_pos(i,:) = obj.cent(ind,:);
                     end
                 end
-            end
-            if(count <= obj.number_of_markers)
-                for i = 1:count
-                    for j = 1:obj.number_of_markers
-                        X = [obj.cent(i,:);obj.PrevPt(j,:)];
+            else
+                for i = 1:n_markers_detected
+                    for j = 1:obj.n_markers
+                        X = [obj.cent(i,:); obj.prev_pos(j,:)];
                         d(j) = pdist(X,'euclidean');
                     end
                     [dmin,ind] = min(d);
-                    if(dmin < 25)
-                        obj.CurrPt(ind,:) = obj.cent(i,:);
+                    if dmin < obj.max_dist
+                        obj.this_pos(ind,:) = obj.cent(i,:);
                     end
                 end
             end
             
             clear d;
-            TF = obj.CurrPt(:,1);  % Writing the 1st column of resrvd
-            index = find(TF == 0);  % Finding those rows which is empty
-            val = isempty(index);  % Checking whether the index is empty  
+            % Find which marker data are missing.
+            missing_markers = find(obj.this_pos(:,1) == 0); 
             
-            if(val == 0)
-                centroids = occlusion(obj,index);   %Change the name of the centroid ->
-            end
-            if(val~=0)
-                centroids = obj.CurrPt;       %Change the name of the centroid ->
+            % Fill in missing marker data if needed.
+            if isempty(missing_markers)
+                centroids = obj.this_pos;
+            else
+                centroids = occlusion(obj,missing_markers);
             end
 
         end 
 
-        function centroids = occlusion(obj,index)   %Change the name of the centroid ->
-            newPrevPt = obj.PrevPt;
-            newP0 = obj.P0; 
-            newPrevPt(index(1:size(index,1)),:) = 0;
-            newP0(index(1:size(index,1)),:) = 0;
-%             [Rot,T,~,~] = pose_estimation(newPrevPt,obj.CurrPt); % SE2 w.r.t previous frame
-            [Rot,T] = pose_estimation(obj,newPrevPt,obj.CurrPt); % SE2 w.r.t previous frame
-            for gg = 1:size(index,1)
-                newPt = Rot*(obj.PrevPt(index(gg),:))' + T;
-                obj.CurrPt(index(gg),:) = newPt;
+        % Reconstruct the missing marker data in case of tether occlusion. 
+        function centroids = occlusion(obj,missing_markers)   
+            newPrevPt = obj.prev_pos;
+            newPrevPt(missing_markers,:) = 0;
+
+        %   Find rigid transformation relative to previous frame based on
+        %  limited marker data (by removing missing marker data).
+            [Rot,T] = pose_estimation(obj,newPrevPt,obj.this_pos);
+
+            % Reconstruct the missing data.
+            for i = missing_markers
+                obj.this_pos(missing_markers,:) = Rot*(obj.prev_pos(missing_markers,:))' + T;
             end
-            centroids = obj.CurrPt;
+            centroids = obj.this_pos;
         end
 
-        function centroids = data_logging(obj,k)
 
-            for i = 1:obj.number_of_markers
-                obj.centroids(k,(3*i)-2:(3*i)) = obj.PrevPt(i,:);
-                centroids = obj.centroids;
-            end
-
-        end
-
-        function [Rot,T,theta,trans] = pose_estimation(obj,A,B,k)
+        function [Rot,T,theta,trans] = pose_estimation(obj,A,B)
 
             [Rot,T] = rigid_transform_3D(A',B');  % SE2 w.r.t previous frame
-%             theta(k,:) = reshape(Rot,[1,9]);   % Changed ANM
-%             trans(k,:) = T';
-
         end
 
-        function plot(obj,thisFrame,count,k,newim)
-
-            figure(10)
-            imshow(thisFrame)
-%             imshow(newim);
-            set(gcf, 'Position',  [100, 100, 1000, 1000])
+        function plot(obj,thisFrame,n_markers_detected,i_frame)
+            frame_num =  i_frame + obj.start_frame - 1;
+            total_frame_num = obj.n_frames + obj.start_frame - 1;
+            imshow(thisFrame) 
+            set(gcf, 'Position',  [10, 50, 1000, 700])
             hold on
-            plot(obj.PrevPt(:,1),1080-obj.PrevPt(:,2),'g*','LineWidth',0.5,'MarkerSize',2)
-%             plot(obj.tracking_data_centroids(k,1),1080-obj.tracking_data_centroid(k,2),'g*','LineWidth',0.5,'MarkerSize',2);
-            
-            caption = sprintf('%d blobs found in frame #%d 0f %d', count, k, obj.numberOfFrames);
-            title(caption, 'FontSize', 20);
+            plot(obj.prev_pos(:,1),1080-obj.prev_pos(:,2),'g*','LineWidth',0.5,'MarkerSize',2)
+            caption = sprintf('%d blobs found in frame #%d 0f %d',...
+                n_markers_detected, frame_num, total_frame_num);
+            title(caption, 'FontSize', 20,'Interpreter','none');
             axis on;
             hold off
             pframe = getframe(gcf);
             writeVideo(obj.vwrite,pframe);
 
         end  
-%         
-%         function plot(obj,thisFrame,count,k)
-% % 
-%             figure(10)
-%             imshow(thisFrame)
-%             set(gcf, 'Position',  [100, 100, 1000, 1000])
-%             hold on
-% %             plot(obj.PrevPt(k,1),1080-obj.PrevPt(k,2),'g*','LineWidth',0.5,'MarkerSize',2)
-%             plot(obj.tracking_data_centroid(k,1),1080-obj.tracking_data_centroid(k,2),'g*','LineWidth',0.5,'MarkerSize',2)
-%             caption = sprintf('%d blobs found in frame #%d 0f %d', count, k, obj.numberOfFrames);
-%             title(caption, 'FontSize', 20);
-%             axis on;
-% %             hold off
-%             ovly_img_hdl = imagesc(obj.overlay_image);              % overlay (reference) image
-%             set(ovly_img_hdl, 'AlphaData', 0.4);    % set overlaid image alpha
-%             hold off;
-%             pframe = getframe(gcf);
-%             writeVideo(obj.vwrite,pframe);
-% 
-%         end 
+
 
     end
 
